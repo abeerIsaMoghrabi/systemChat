@@ -64,9 +64,9 @@ void *sendMessage(void *sock_id) {
 
 void *receiveMessage(void *sock_id) {
 	char buff[256];
-	bzero(buff,255);
+	
 	while (1) {
-
+	bzero(buff,255);
 	if (recv(*((int *) sock_id), buff,strlen(buff) + 1, 0) < 0) {
 	   
 
