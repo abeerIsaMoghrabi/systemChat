@@ -4,24 +4,33 @@
 #include<sys/socket.h>
 #include<netinet/in.h>
 #include<string.h>
-#include <sys/time.h> //FD_SET, FD_ISSET, FD_ZERO macros
+#include <sys/time.h> 
 #define CLIENT_NUM 30
 struct clint_str {
 int id;
 char name[256];
 };
 
-
+/**
+	@function: create address object 
+	@param: socket port
+	@return: sockaddr_in
+	@note: INADDR_ANY is address of server machine
+**/
 struct sockaddr_in createScocketAddr(int portNum){
 	
 	struct sockaddr_in serverSockAddr;
-	bzero((char *) &serverSockAddr,sizeof(serverSockAddr));//???
+	bzero((char *) &serverSockAddr,sizeof(serverSockAddr));
 	serverSockAddr.sin_port=htons(portNum);	
-	serverSockAddr.sin_addr.s_addr= INADDR_ANY;// address of server machine
+	serverSockAddr.sin_addr.s_addr= INADDR_ANY;
 	serverSockAddr.sin_family=AF_INET;
 	return serverSockAddr;
 }
-
+/**
+	@function: check for error and exit if happend ti compare two value and if the first value less than the socend it exit 
+	@param1: the value
+	@param2: the code
+**/
 void CheckError(int value , int code , char *msg){
 	if(value < code ){
 		 perror(msg);
@@ -29,188 +38,219 @@ void CheckError(int value , int code , char *msg){
 	}
 }
 
-int main(int argc , char *argv[]){
+/**
+	@function: fill buffer of type struct clint_str with zeros
+	@param1: the buffer
+**/
 
-	int serverSocket,socketToReadWrite;
+void fillItWithZero(struct clint_str clientSockets[]){
+	int i;
+	for( i=0;i<CLIENT_NUM;i++){
+		clientSockets[i].id=0;
+		strcpy(clientSockets[i].name,"");
+		
+	}
 	
-	struct sockaddr_in serverSockAddr , clientSockAddr;
-	char buff[256];
+}
+/**
+	@function: bind socket to specific address and  make it listen for  action
+	@param1: socket port
+	@param2: socket file descriptor
+	@return: struct sockaddr_in
+	@note: maximum it can pend 30 connection to this socket
+**/
+struct sockaddr_in  prepareServerSocket(int port,int serverSocket){
+	
 
-///////////////////////////////////////////////
+	CheckError(serverSocket , 0 , "can't creat socket\n");
+
+	struct sockaddr_in serverSockAddr=createScocketAddr(port);
+
+	CheckError(bind(serverSocket,(struct sockaddr *)&serverSockAddr,sizeof(serverSockAddr)),0,"Error on binding\n");
+
+	listen(serverSocket,30);
+
+	return 	serverSockAddr;
+
+}
+/**
+	@function: handle server socket action which is adding new socket to client array
+	@param1: new socket
+	@param2: client socket array
+**/
+ void addSocketToClientArray(int new_socket,struct clint_str client_socket[]){
+	
+	int i;
+	char buff[256];
+	for (i = 0; i < CLIENT_NUM; i++) 
+	{ 
+		 
+		if( client_socket[i].id == 0 ) 
+		{ 
+			client_socket[i].id = new_socket;
+			recv( new_socket , buff, 256,0);
+
+			strcpy(client_socket[i].name,buff );
+			
+		
+			break; 
+		} 
+	}
+
+}
+/**
+	@function: remove all sockets in set and fill the set again according to client array
+	@param1: readfds
+	@param2: server socket
+	@param3: client socket array
+	@return: max_sd
+	@note:every time we clear the set and fill it again to keep uptodate with every changed happend to client array
+**/
+int  clearAndFillSet(fd_set *readfds,int serverSocket,struct clint_str client_socket[]){
+	FD_ZERO(readfds); 
+	FD_SET(serverSocket, readfds); 
+	int max_sd = serverSocket; 
+	int i;
+	int sd;
+
+	for(i=0;i <CLIENT_NUM;i++) 
+	{ 
+		
+		sd = client_socket[i].id;  
+		if(sd > 0){
+			FD_SET( sd , readfds); 
+		} 
+			
+
+		 if(sd > max_sd){   
+        		max_sd = sd; 	
+		}
+
+	} 
+	return max_sd;
+	
+}
+/**
+	@function: broad cast message to all client
+	@param1: sender socket
+	@param2: server socket
+	@param3: message buffer
+	
+**/
+void breadCastMessage(int senderSocket,struct clint_str client_socket[],char buff[]){
+
+	int j;
+	for( j=0;j<CLIENT_NUM;j++){
+		if(j!=senderSocket && client_socket[j].id>0){
+	
+		char message[512];
+		sprintf(message,"%s: %s",client_socket[senderSocket].name,buff);
+		message[strlen(message)]='\0';
+
+		 if (send(client_socket[j].id,message,strlen(message),0) < 0){ 
+		 	error("ERROR writing to socket");
+		 }	
+			
+		
+		bzero(message,511);
+		}
+	
+	}
+
+
+}
+/**
+	@function: this function handle select it check for any action
+	@param1: server socket
+	@param2: server socket address
+	
+**/
+void serverActions(int serverSocket,struct sockaddr_in serverSockAddr){
 	fd_set readfds;
 	int sd;
 	int i;
 	int new_socket;
 	int max_sd;
 	struct clint_str client_socket[CLIENT_NUM];
-	for(i=0;i<CLIENT_NUM;i++){
-		client_socket[i].id=0;
-		client_socket[i].name[0]='\0';
-	}
 	int activity;
-	int count=0;
-//////////////////////////////////////////////////
-
-	CheckError(argc , 2 , "please enter port number\n");
-
- 	serverSocket = socket(AF_INET,SOCK_STREAM,0);//1- create socket
-
-	
-	CheckError(serverSocket , 0 , "can't creat socket\n");
-
-	serverSockAddr=createScocketAddr(atoi(argv[1]));//2- prepare address
-
-	CheckError(bind(serverSocket,(struct sockaddr *)&serverSockAddr,sizeof(serverSockAddr)),0,"Error on binding\n");//3- bind server address to that socket
-
-	listen(serverSocket,5);//4- listen for connection
-
-///////////////////////////////////////////////////////
-	while(1) 
-	{ 
-		//every time we clear the set and fill it again to keep uptodate with closed and opened socket 
-		
-		FD_ZERO(&readfds); 
-	
-		//add master socket to set 
-		FD_SET(serverSocket, &readfds); 
-		max_sd = serverSocket; 
+	fillItWithZero(client_socket);
+	char buff[256];
+	while(1){ 
 			
-			
-	//add child sockets to set 
-		for(i=0;i <CLIENT_NUM;i++) //this for loop to fill the set 
-		{ 
-			//socket descriptor 
-			sd = client_socket[i].id; 
-				
-			//if valid socket descriptor then add to read list 
-			if(sd > 0) 
-				FD_SET( sd , &readfds); 
 
-			 if(sd > max_sd)   
-                		max_sd = sd; 	
-		
-		
-		} 
-	
-	
-	
-		//wait for an activity on one of the sockets , timeout is NULL , 
-		//so wait indefinitely 
+		max_sd=clearAndFillSet( &readfds, serverSocket,client_socket);
+
 		activity = select( max_sd + 1 , &readfds , NULL , NULL , NULL); 
+
+		CheckError(activity , 0,"select error\n" );
+		 
 	
-		if ((activity < 0) ) 
-		{ 
-			printf("select error"); 
-		} 
-		
 		//there are two cases 
 		//1- action happend to master socket (serversocket) 
 		//2- action happend to client socket 
 
 
-		
-		//1- If something happened on the master socket , 
-		//then its an incoming connection 
-		if (FD_ISSET(serverSocket, &readfds)) 
-		{ socklen_t addr_size = sizeof(clientSockAddr);//????
-			 	if ((new_socket = accept(serverSocket, 
-					(struct sockaddr *)&serverSockAddr, &addr_size))<0) 
-			{ 
-				perror("accept"); 
-				exit(EXIT_FAILURE); 
-			} 
-			
-				
-			//add new socket to array of sockets 
-			for (i = 0; i < CLIENT_NUM; i++) 
-			{ 
-				//if position is empty 
-				if( client_socket[i].id == 0 ) 
-				{ 
-					client_socket[i].id = new_socket;
-					recv( new_socket , buff, 256,0);
-printf("buffer=%s\n",buff);
- 					strcpy(client_socket[i].name,buff );
-					//count++;
-					printf("socket id =%d , name=%s\n",client_socket[i].id,client_socket[i].name);
-						
-					break; 
-				} 
-			}
-		} 
-			
-			
 	
-			
-			
-		//2- else its some IO operation on some other socket (clientsocket+)
+		
+		if (FD_ISSET(serverSocket, &readfds)) 
+		{ 		socklen_t addr_size = sizeof(serverSockAddr);//????
+				new_socket = accept(serverSocket, (struct sockaddr *)&serverSockAddr, &addr_size);
+				CheckError(new_socket,0,"accept faild\n");
+			        addSocketToClientArray(new_socket,client_socket);
+
+		} 
+		
+		
+
+		
+		
+		
 		for (i = 0; i < CLIENT_NUM; i++) 
 		{ 
 			sd = client_socket[i].id; 
-				
+			
 			if (FD_ISSET( sd , &readfds)) 
 			{ 
-				//Check if it was for closing , and also read the 
-				//incoming message 
-				//when read return 0 that mean close connction
-				//this statment read and if the result is 0 then close the connection but 
-				//else it means the client connected to this socket send message to server
-				
+			
+			
 				
 				if (( recv( sd , buff, 256,0)) == 0) 
 				{ 
-					//Somebody disconnected , get his details and print 
 					
+				
 					close( sd ); 
 					client_socket[i].id = 0; 
 				} 
-					
-				//Echo back the message that came in 
+				
 				else
 				{ 
-					
-					// server read message from one of the client so now server want to broadcast the message 
-					int j;
-					for( j=0;j<CLIENT_NUM;j++){
-						if(j!=i && client_socket[j].id>0){
-						
-						char message[512];
-						sprintf(message,"%s: %s",client_socket[i].name,buff);
-						message[strlen(message)]='\0';
-						//int n = send(client_socket[j],buff,strlen(buff),0);
-
-						 if (send(client_socket[j].id,message,strlen(message),0) < 0){ 
-						 error("ERROR writing to socket");
-						 }	
-							//printf("message:%s\n",buff);
-							bzero(buff,255);
-							bzero(message,511);
-						}
-						
-					}//for
-				} //else
-			} //if
+				
+					breadCastMessage(i, client_socket, buff);//send socket postion no socket id
+					bzero(buff,255);
+				} 
+			} 
 		} 
 	} 
-////////////////////////////////////////////////////////
 
-	/*socklen_t cli_addr_size = sizeof(clientSockAddr);//????
-	printf("Runing....\n");
+}
+
+int main(int argc , char *argv[]){
+
+	int serverSocket,socketToReadWrite;
 	
-	socketToReadWrite=accept(serverSocket,(struct sockaddr *)&clientSockAddr,&cli_addr_size);//5- accept connection (block)
-
-	CheckError(socketToReadWrite,0,"Server :cant accept\n");
-
-	bzero(buff,255);
-        int result=read(socketToReadWrite,buff,255);//6- read fron socket (block)
-
-	CheckError(result,0,"cant read\n");
-
-	printf("message:%s\n",buff);*/
-		
+	struct sockaddr_in serverSockAddr ;
 	
+	CheckError(argc , 2 , "please enter port number\n");
 
+ 	serverSocket = socket(AF_INET,SOCK_STREAM,0);//1- create socket
 
+	serverSockAddr=prepareServerSocket(atoi(argv[1]),serverSocket);
+ 	
+        
+	serverActions(serverSocket,serverSockAddr);
+
+	
+	return 0;
 
 }
 
